@@ -2,40 +2,36 @@ import asyncio
 import logging
 import os
 import requests
+import urllib3
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart, Command
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 
+# Отключаем предупреждения об SSL
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 # ================= АКТИВНЫЕ КЛЮЧИ ПРОЕКТА =================
 TELEGRAM_TOKEN = "8444646491:AAGxTAzNEtRGGWI7SFGZjI1_JjxhJmXegRo"
-
-# Твой рабочий API-ключ Groq
 AI_API_KEY = os.getenv("GROQ_API_KEY")
 
-# Мощная и полностью бесплатная модель на серверах Groq
-MODEL_NAME = "llama-3.1-70b-versatile"
+# Переключили на 100% бесплатную и скоростную модель Groq
+MODEL_NAME = "llama3-8b-8192"
 
-# Ссылка твоего приложения на Render
 RENDER_EXTERNAL_URL = "https://onrender.com"
 WEBHOOK_PATH = f"/webhook/{TELEGRAM_TOKEN}"
 WEBHOOK_URL = f"{RENDER_EXTERNAL_URL}{WEBHOOK_PATH}"
 
 SYSTEM_PROMPT = (
     "Ты — профессиональный, эмпатичный ИИ-психолог. Твоя цель — слушать пользователя и помогать ему методами КПТ.\n"
-    "КРИТИЧЕСКИЕ ПРАВИЛА ДЛЯ ТЕСТОВ:\n"
-    "1. Если пользователь хочет пройти тест, выбери подходящий психологический тест и начни его.\n"
-    "2. Проводи тест строго ПОШАГОВО: задавай ровно ОДИН вопрос за раз. Жди ответа пользователя перед отправкой следующего вопроса.\n"
-    "3. В конце теста подведи итог, расшифруй баллы.\n"
-    "4. Пиши сообщения только на русском языке, не используй иностранные слова без необходимости."
+    "Проводи тесты строго ПОШАГОВО: задавай ровно ОДИН вопрос за раз. Жди ответа.\n"
+    "ВАЖНО: Всегда отвечай строго на русском языке!"
 )
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
-
-# Оперативная память сервера для истории сообщений
 user_history = {}
 
 def get_main_keyboard():
@@ -65,11 +61,10 @@ async def handle_message(message: types.Message):
         user_history[user_id] = []
 
     user_history[user_id].append({"role": "user", "content": user_text})
-    messages_to_send = [{"role": "system", "content": SYSTEM_PROMPT}] + user_history[user_id][-10:]
+    messages_to_send = [{"role": "system", "content": SYSTEM_PROMPT}] + user_history[user_id][-8:]
 
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
 
-    # Официальный защищенный эндпоинт Groq Cloud API
     url = "https://groq.com"
     headers = {
         "Authorization": f"Bearer {AI_API_KEY}",
@@ -82,25 +77,23 @@ async def handle_message(message: types.Message):
     }
 
     try:
-        response = requests.post(url, json=payload, headers=headers, timeout=30)
+        response = requests.post(url, json=payload, headers=headers, timeout=30, verify=False)
         if response.status_code == 200:
-            bot_reply = response.json()['choices'][0]['message']['content'].strip()
-            
-            # Убираем внутренние теги рассуждений, если они просочатся
-            if "</think>" in bot_reply: 
-                bot_reply = bot_reply.split("</think>")[-1].strip()
-
+            bot_reply = response.json()['choices']['message']['content'].strip()
             user_history[user_id].append({"role": "assistant", "content": bot_reply})
             await message.answer(bot_reply, reply_markup=get_main_keyboard())
         else:
-            logging.error(f"Сбой ИИ: {response.status_code} - {response.text}")
-            await message.answer("Извини, я немного отвлекся. Повтори, пожалуйста, свою мысль.", reply_markup=get_main_keyboard())
-
+            # Если Groq выдал ошибку — бот сам напишет её код прямо тебе в чат!
+            error_msg = f"Ошибка ИИ (Код {response.status_code}): {response.text}"
+            logging.error(error_msg)
+            await message.answer(f"⚠️ Ошибка шлюза ИИ. Перезапустите бота через /start\n\nТехнические детали: {response.status_code}", reply_markup=get_main_keyboard())
     except Exception as e:
-        logging.error(f"Ошибка API: {e}")
-        await message.answer("Извини, я немного отвлекся. Повтори, пожалуйста, свою мысль.", reply_markup=get_main_keyboard())
+        logging.error(f"Ошибка сети: {e}")
+        await message.answer(f"🔴 Критическая ошибка: {e}", reply_markup=get_main_keyboard())
 
 async def on_startup(bot: Bot) -> None:
+    # Принудительно удаляем старый застрявший вебхук перед установкой нового!
+    await bot.delete_webhook(drop_pending_updates=True)
     await bot.set_webhook(url=WEBHOOK_URL)
 
 def main():
