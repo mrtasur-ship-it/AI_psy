@@ -1,20 +1,21 @@
 import asyncio
 import logging
 import os
+import requests
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart, Command
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
-from huggingface_hub import InferenceClient # Официальный клиент ИИ
 
 # ================= АКТИВНЫЕ КЛЮЧИ ПРОЕКТА =================
 TELEGRAM_TOKEN = "8444646491:AAGxTAzNEtRGGWI7SFGZjI1_JjxhJmXegRo"
-HF_TOKEN = os.getenv("HF_TOKEN")
 
+# Твой рабочий API-ключ Groq
+AI_API_KEY = os.getenv("GROQ_API_KEY")
 
-# Используем официальную бесплатную флагманскую модель
-MODEL_NAME = "Qwen/Qwen2.5-72B-Instruct"
+# Мощная и полностью бесплатная модель на серверах Groq
+MODEL_NAME = "llama-3.1-70b-versatile"
 
 # Ссылка твоего приложения на Render
 RENDER_EXTERNAL_URL = "https://onrender.com"
@@ -26,15 +27,13 @@ SYSTEM_PROMPT = (
     "КРИТИЧЕСКИЕ ПРАВИЛА ДЛЯ ТЕСТОВ:\n"
     "1. Если пользователь хочет пройти тест, выбери подходящий психологический тест и начни его.\n"
     "2. Проводи тест строго ПОШАГОВО: задавай ровно ОДИН вопрос за раз. Жди ответа пользователя перед отправкой следующего вопроса.\n"
-    "3. В конце теста подведи итог, расшифруй баллы."
+    "3. В конце теста подведи итог, расшифруй баллы.\n"
+    "4. Пиши сообщения только на русском языке, не используй иностранные слова без необходимости."
 )
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
-
-# Инициализируем официальный клиент ИИ с твоим рабочим токеном
-hf_client = InferenceClient(token=HF_TOKEN)
 
 # Оперативная память сервера для истории сообщений
 user_history = {}
@@ -70,29 +69,32 @@ async def handle_message(message: types.Message):
 
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
 
+    # Официальный защищенный эндпоинт Groq Cloud API
+    url = "https://groq.com"
+    headers = {
+        "Authorization": f"Bearer {AI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "messages": messages_to_send,
+        "model": MODEL_NAME,
+        "temperature": 0.7
+    }
+
     try:
-        # Прямой, официальный запрос со стабильного сервера Render на стабильный сервер Hugging Face
-        response = hf_client.chat_completion(
-            model=MODEL_NAME,
-            messages=messages_to_send,
-            max_tokens=600,
-            temperature=0.7
-        )
-        
-        # Разбор ответа любой структуры
-        bot_reply = ""
-        if hasattr(response, "choices") and response.choices:
-            bot_reply = response.choices[0].message.content
-        elif isinstance(response, dict) and "choices" in response:
-            bot_reply = response["choices"][0]["message"]["content"]
+        response = requests.post(url, json=payload, headers=headers, timeout=30)
+        if response.status_code == 200:
+            bot_reply = response.json()['choices'][0]['message']['content'].strip()
+            
+            # Убираем внутренние теги рассуждений, если они просочатся
+            if "</think>" in bot_reply: 
+                bot_reply = bot_reply.split("</think>")[-1].strip()
+
+            user_history[user_id].append({"role": "assistant", "content": bot_reply})
+            await message.answer(bot_reply, reply_markup=get_main_keyboard())
         else:
-            bot_reply = str(response)
-
-        if "</think>" in bot_reply: 
-            bot_reply = bot_reply.split("</think>")[-1].strip()
-
-        user_history[user_id].append({"role": "assistant", "content": bot_reply})
-        await message.answer(bot_reply, reply_markup=get_main_keyboard())
+            logging.error(f"Сбой ИИ: {response.status_code} - {response.text}")
+            await message.answer("Извини, я немного отвлекся. Повтори, пожалуйста, свою мысль.", reply_markup=get_main_keyboard())
 
     except Exception as e:
         logging.error(f"Ошибка API: {e}")
