@@ -20,8 +20,8 @@ AI_API_KEY = os.getenv("GROQ_API_KEY")
 # Белый список (0 — выключено, конкретный ID — приватный режим)
 ADMIN_ID = 7706526704 
 
-# Переключили на 100% стабильную и бесплатную модель
-DEFAULT_MODEL = "llama-3.1-8b-instant"
+# Актуальная флагманская модель Groq
+DEFAULT_MODEL = "llama-3.3-70b-specdec"
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "https://onrender.com")
 WEBHOOK_PATH = f"/webhook/{TELEGRAM_TOKEN}"
 WEBHOOK_URL = f"{RENDER_EXTERNAL_URL}{WEBHOOK_PATH}"
@@ -34,6 +34,7 @@ SYSTEM_PROMPT = (
 
 logging.basicConfig(level=logging.INFO)
 
+# ИСПРАВЛЕНО: Возвращен стандартный MARKDOWN, так как модели ИИ генерируют текст именно под него. Бот больше не упадет из-за точек и дефисов.
 bot = Bot(token=TELEGRAM_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
 dp = Dispatcher()
 ai_client = AsyncGroq(api_key=AI_API_KEY)
@@ -76,7 +77,8 @@ async def start_command(message: types.Message, state: FSMContext):
         await message.answer("🔒 Извини, этот бот является приватным ИИ-ассистентом.")
         return
 
-    await state.clear()
+    # Чистим стейты и заводим пустую историю
+    await state.set_state(None)
     await state.set_data({"history": []})
     
     user_metadata[user_id] = datetime.now()
@@ -121,14 +123,15 @@ async def reset_memory(message: types.Message, state: FSMContext):
     user_metadata[message.from_user.id] = datetime.now()
     await message.answer("Память чата очищена.", reply_markup=get_main_keyboard())
 
-# Хэндлер-заглушка от спама (работает, ТОЛЬКО когда ИИ занят генерацией)
+# Хэндлер-заглушка от спама
 @dp.message(ChatStates.processing)
 async def handle_spam(message: types.Message):
     await message.answer("⏳ Я еще обдумываю твой предыдущий ответ. Пожалуйста, подожди секунду...")
 
-# Универсальный и надежный обработчик диалога
+# Универсальный обработчик диалога
 @dp.message()
 async def handle_message(message: types.Message, state: FSMContext):
+    global DEFAULT_MODEL
     user_id = message.from_user.id
     user_text = message.text
     
@@ -143,6 +146,7 @@ async def handle_message(message: types.Message, state: FSMContext):
         await message.answer("🔒 Доступ ограничен.")
         return
 
+    # Включаем защитный стейт блокировки спама
     await state.set_state(ChatStates.processing)
 
     state_data = await state.get_data()
@@ -164,15 +168,19 @@ async def handle_message(message: types.Message, state: FSMContext):
         )
         bot_reply = completion.choices.message.content.strip()
     except Exception as e:
-        # ВЫВОДИМ ТОЧНУЮ ОШИБКУ В КРИТИЧЕСКИЙ ЛОГ RENDER
-        logging.error(f"💥 Критическая ошибка вызова Groq API: {e}")
+        logging.error(f"💥 Ошибка базовой модели {current_model}: {e}")
         try:
             models_list = await ai_client.models.list()
-            active_models = [m.id for m in models_list.data if not any(x in m.id for x in ["preview", "whisper", "audio"])]
+            active_models = [
+                m.id for m in models_list.data 
+                if not any(x in m.id.lower() for x in ["preview", "whisper", "audio", "guard", "vision", "telemetry"])
+            ]
             
             if active_models:
-                current_model = active_models[0]
-                logging.info(f"🔄 Переключаюсь на резервную модель: {current_model}")
+                current_model = active_models
+                DEFAULT_MODEL = current_model
+                logging.info(f"🔄 Успешно переключился на рабочую текстовую модель: {current_model}")
+                
                 completion = await ai_client.chat.completions.create(
                     model=current_model,
                     messages=messages_to_send,
@@ -183,6 +191,7 @@ async def handle_message(message: types.Message, state: FSMContext):
         except Exception as critical_error:
             logging.error(f"🚨 Полный крах шлюза ИИ: {critical_error}")
 
+    # Сбрасываем только техническое состояние 'processing' в None
     await state.set_state(None)
     
     if bot_reply:
