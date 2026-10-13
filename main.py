@@ -13,6 +13,7 @@ from aiohttp import web
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ================= АКТИВНЫЕ КЛЮЧИ ПРОЕКТА =================
+# ================= БЕЗОПАСНАЯ НАСТРОЙКА КЛЮЧЕЙ =================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 AI_API_KEY = os.getenv("GROQ_API_KEY")
 
