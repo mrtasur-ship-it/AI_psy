@@ -3,7 +3,7 @@ import logging
 import os
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.client.default import default_bot_properties
+from aiogram.client.default import DefaultBotProperties  # ИСПРАВЛЕННЫЙ ИМПОРТ
 from aiogram.filters import CommandStart, Command
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
 from aiogram.fsm.context import FSMContext
@@ -33,7 +33,8 @@ SYSTEM_PROMPT = (
 
 logging.basicConfig(level=logging.INFO)
 
-bot = Bot(token=TELEGRAM_TOKEN, default=default_bot_properties.DefaultBotProperties(parse_mode="Markdown"))
+# ИСПРАВЛЕННАЯ ИНИЦИАЛИЗАЦИЯ БОТА
+bot = Bot(token=TELEGRAM_TOKEN, default=DefaultBotProperties(parse_mode="Markdown"))
 dp = Dispatcher()
 ai_client = AsyncGroq(api_key=AI_API_KEY)
 
@@ -75,7 +76,6 @@ async def start_command(message: types.Message, state: FSMContext):
         await message.answer("🔒 Извини, этот бот является приватным ИИ-ассистентом.")
         return
 
-    # Безопасно очищаем стейт и заводим чистую историю
     await state.set_state(None)
     await state.set_data({"history": []})
     
@@ -121,12 +121,10 @@ async def reset_memory(message: types.Message, state: FSMContext):
     user_metadata[message.from_user.id] = datetime.now()
     await message.answer("Память чата очищена.", reply_markup=get_main_keyboard())
 
-# Хэндлер-заглушка от спама (работает, ТОЛЬКО когда ИИ занят генерацией)
 @dp.message(ChatStates.processing)
 async def handle_spam(message: types.Message):
     await message.answer("⏳ Я еще обдумываю твой предыдущий ответ. Пожалуйста, подожди секунду...")
 
-# Универсальный и надежный обработчик диалога (поймает любое сообщение)
 @dp.message()
 async def handle_message(message: types.Message, state: FSMContext):
     current_state = await state.get_state()
@@ -142,14 +140,12 @@ async def handle_message(message: types.Message, state: FSMContext):
         await message.answer("🔒 Доступ ограничен.")
         return
 
-    # Включаем защитный стейт блокировки спама
     await state.set_state(ChatStates.processing)
 
     state_data = await state.get_data()
     history = state_data.get("history", [])
     history.append({"role": "user", "content": user_text})
 
-    # Отправляем последние 10 реплик для экономии токенов
     messages_to_send = [{"role": "system", "content": SYSTEM_PROMPT}] + history[-10:]
 
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
@@ -182,7 +178,6 @@ async def handle_message(message: types.Message, state: FSMContext):
         except Exception as critical_error:
             logging.error(f"Критический сбой API Groq: {critical_error}")
 
-    # СБРАСЫВАЕМ только стейт блокировки, не задевая контекст данных переписки
     await state.set_state(None)
     
     if bot_reply:
