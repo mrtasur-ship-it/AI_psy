@@ -13,8 +13,9 @@ from aiohttp import web
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ================= АКТИВНЫЕ КЛЮЧИ ПРОЕКТА =================
-TELEGRAM_TOKEN = "8444646491:AAGxTAzNEtRGGWI7SFGZjI1_JjxhJmXegRo"
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 AI_API_KEY = os.getenv("GROQ_API_KEY")
+
 
 # Переключили на 100% бесплатную и скоростную модель Groq
 MODEL_NAME = "llama3-8b-8192"
