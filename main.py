@@ -14,7 +14,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 AI_API_KEY = os.getenv("GROQ_API_KEY")
 
 # Стабильная бесплатная модель на серверах Groq
-MODEL_NAME = "llama3-8b-8192"
+MODEL_NAME = "llama-3.1-8b-instant"
 
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "https://ai-psy-1.onrender.com")
 WEBHOOK_PATH = f"/webhook/{TELEGRAM_TOKEN}"
