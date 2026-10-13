@@ -16,9 +16,8 @@ from groq import AsyncGroq
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 AI_API_KEY = os.getenv("GROQ_API_KEY")
 
-# === ВАЖНО: ВСТАВЬ СЮДА СВОЙ TELEGRAM ID ИЗ @userinfobot ===
-# Твой ID: 77065267041 (скопирован из твоих прошлых логов вебхука)
-ADMIN_ID = 7706526704  
+# Белый список (0 — выключено, конкретный ID — приватный режим)
+ADMIN_ID = 7706526704 
 
 # Модели
 DEFAULT_MODEL = "llama-3.3-70b-versatile"
@@ -76,7 +75,8 @@ async def start_command(message: types.Message, state: FSMContext):
         await message.answer("🔒 Извини, этот бот является приватным ИИ-ассистентом.")
         return
 
-    await state.clear()
+    # Безопасно очищаем стейт и заводим чистую историю
+    await state.set_state(None)
     await state.set_data({"history": []})
     
     user_metadata[user_id] = datetime.now()
@@ -117,18 +117,23 @@ async def reset_memory(message: types.Message, state: FSMContext):
         await message.answer("🔒 Доступ ограничен.")
         return
         
-    await state.update_data(history=[])
+    await state.set_data({"history": []})
     user_metadata[message.from_user.id] = datetime.now()
     await message.answer("Память чата очищена.", reply_markup=get_main_keyboard())
 
-# Хэндлер-заглушка от спама (работает, когда стейт переключен в processing)
+# Хэндлер-заглушка от спама (работает, ТОЛЬКО когда ИИ занят генерацией)
 @dp.message(ChatStates.processing)
 async def handle_spam(message: types.Message):
     await message.answer("⏳ Я еще обдумываю твой предыдущий ответ. Пожалуйста, подожди секунду...")
 
-# Универсальный обработчик всех остальных текстовых сообщений
+# Универсальный и надежный обработчик диалога (поймает любое сообщение)
 @dp.message()
 async def handle_message(message: types.Message, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state == ChatStates.processing.state:
+        await handle_spam(message)
+        return
+
     user_id = message.from_user.id
     user_text = message.text
     track_user_activity(message.from_user)
@@ -137,13 +142,14 @@ async def handle_message(message: types.Message, state: FSMContext):
         await message.answer("🔒 Доступ ограничен.")
         return
 
-    # Защищаем стейт от спама
+    # Включаем защитный стейт блокировки спама
     await state.set_state(ChatStates.processing)
 
     state_data = await state.get_data()
     history = state_data.get("history", [])
     history.append({"role": "user", "content": user_text})
 
+    # Отправляем последние 10 реплик для экономии токенов
     messages_to_send = [{"role": "system", "content": SYSTEM_PROMPT}] + history[-10:]
 
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
@@ -176,18 +182,18 @@ async def handle_message(message: types.Message, state: FSMContext):
         except Exception as critical_error:
             logging.error(f"Критический сбой API Groq: {critical_error}")
 
-    # Сбрасываем защитный стейт обратно в None (обычный режим)
-    await state.clear()
-    await state.set_data({"history": history})
-
+    # СБРАСЫВАЕМ только стейт блокировки, не задевая контекст данных переписки
+    await state.set_state(None)
+    
     if bot_reply:
         if "</think>" in bot_reply:
             bot_reply = bot_reply.split("</think>")[-1].strip()
 
         history.append({"role": "assistant", "content": bot_reply})
-        await state.update_data(history=history)
+        await state.set_data({"history": history})
         await message.answer(bot_reply, reply_markup=get_main_keyboard())
     else:
+        await state.set_data({"history": history})
         await message.answer("⚠️ Ошибка шлюза ИИ. Попробуйте позже.", reply_markup=get_main_keyboard())
 
 async def on_startup(bot: Bot) -> None:
