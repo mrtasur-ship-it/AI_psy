@@ -9,16 +9,15 @@ from aiogram.utils.keyboard import ReplyKeyboardBuilder
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 
-# Отключаем предупреждения об SSL
+# Отключаем лишние предупреждения об SSL
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# ================= АКТИВНЫЕ КЛЮЧИ ПРОЕКТА =================
 # ================= БЕЗОПАСНАЯ НАСТРОЙКА КЛЮЧЕЙ =================
+# Бот заберет ключи из скрытых настроек Render, на GitHub их не будет!
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 AI_API_KEY = os.getenv("GROQ_API_KEY")
 
-
-# Переключили на 100% бесплатную и скоростную модель Groq
+# Стабильная бесплатная модель на серверах Groq
 MODEL_NAME = "llama3-8b-8192"
 
 RENDER_EXTERNAL_URL = "https://onrender.com"
@@ -85,16 +84,14 @@ async def handle_message(message: types.Message):
             user_history[user_id].append({"role": "assistant", "content": bot_reply})
             await message.answer(bot_reply, reply_markup=get_main_keyboard())
         else:
-            # Если Groq выдал ошибку — бот сам напишет её код прямо тебе в чат!
             error_msg = f"Ошибка ИИ (Код {response.status_code}): {response.text}"
             logging.error(error_msg)
-            await message.answer(f"⚠️ Ошибка шлюза ИИ. Перезапустите бота через /start\n\nТехнические детали: {response.status_code}", reply_markup=get_main_keyboard())
+            await message.answer(f"⚠️ Ошибка шлюза ИИ. Перезапустите бота через /start", reply_markup=get_main_keyboard())
     except Exception as e:
         logging.error(f"Ошибка сети: {e}")
-        await message.answer(f"🔴 Критическая ошибка: {e}", reply_markup=get_main_keyboard())
+        await message.answer(f"🔴 Ошибка сети, попробуйте еще раз.", reply_markup=get_main_keyboard())
 
 async def on_startup(bot: Bot) -> None:
-    # Принудительно удаляем старый застрявший вебхук перед установкой нового!
     await bot.delete_webhook(drop_pending_updates=True)
     await bot.set_webhook(url=WEBHOOK_URL)
 
