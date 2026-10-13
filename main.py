@@ -34,7 +34,6 @@ SYSTEM_PROMPT = (
 
 logging.basicConfig(level=logging.INFO)
 
-# ИСПРАВЛЕНО: Возвращен стандартный MARKDOWN, так как модели ИИ генерируют текст именно под него. Бот больше не упадет из-за точек и дефисов.
 bot = Bot(token=TELEGRAM_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
 dp = Dispatcher()
 ai_client = AsyncGroq(api_key=AI_API_KEY)
@@ -77,7 +76,6 @@ async def start_command(message: types.Message, state: FSMContext):
         await message.answer("🔒 Извини, этот бот является приватным ИИ-ассистентом.")
         return
 
-    # Чистим стейты и заводим пустую историю
     await state.set_state(None)
     await state.set_data({"history": []})
     
@@ -146,7 +144,7 @@ async def handle_message(message: types.Message, state: FSMContext):
         await message.answer("🔒 Доступ ограничен.")
         return
 
-    # Включаем защитный стейт блокировки спама
+    # Включаем состояние обработки запроса
     await state.set_state(ChatStates.processing)
 
     state_data = await state.get_data()
@@ -173,12 +171,12 @@ async def handle_message(message: types.Message, state: FSMContext):
             models_list = await ai_client.models.list()
             active_models = [
                 m.id for m in models_list.data 
-                if not any(x in m.id.lower() for x in ["preview", "whisper", "audio", "guard", "vision", "telemetry"])
+                if not any(x in m.id.lower() for x in ["preview", "whisper", "audio", "guard", "vision", "telemetry", "oss", "orpheus", "allam"])
             ]
             
             if active_models:
-                current_model = active_models
-                DEFAULT_MODEL = current_model
+                current_model = active_models[0]
+                DEFAULT_MODEL = current_model 
                 logging.info(f"🔄 Успешно переключился на рабочую текстовую модель: {current_model}")
                 
                 completion = await ai_client.chat.completions.create(
@@ -191,7 +189,7 @@ async def handle_message(message: types.Message, state: FSMContext):
         except Exception as critical_error:
             logging.error(f"🚨 Полный крах шлюза ИИ: {critical_error}")
 
-    # Сбрасываем только техническое состояние 'processing' в None
+    # Сбрасываем техническое состояние в None, сохраняя данные истории диалога
     await state.set_state(None)
     
     if bot_reply:
