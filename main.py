@@ -1,112 +1,194 @@
 import asyncio
 import logging
 import os
-import requests
-from aiogram import Bot, Dispatcher, types
+from datetime import datetime
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.client.default import default_bot_properties
 from aiogram.filters import CommandStart, Command
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import StatesGroup, State
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
-from groq import Groq
+from groq import AsyncGroq
 
-# ================= БЕЗОПАСНАЯ НАСТРОЙКА КЛЮЧЕЙ =================
+# ================= НАСТРОЙКА ОКРУЖЕНИЯ =================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 AI_API_KEY = os.getenv("GROQ_API_KEY")
 
-# Модель по умолчанию (если она отключена, сработает автоподбор ниже)
-DEFAULT_MODEL = "llama-3.3-70b-versatile"
+# === ВАЖНО: ВСТАВЬ СЮДА СВОЙ TELEGRAM ID ИЗ @userinfobot ===
+# Твой ID: 77065267041 (скопирован из твоих прошлых логов вебхука)
+ADMIN_ID = 7706526704  
 
+# Модели
+DEFAULT_MODEL = "llama-3.3-70b-versatile"
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "https://onrender.com")
 WEBHOOK_PATH = f"/webhook/{TELEGRAM_TOKEN}"
 WEBHOOK_URL = f"{RENDER_EXTERNAL_URL}{WEBHOOK_PATH}"
 
 SYSTEM_PROMPT = (
-    "Ты — профессиональный, эмпатичный ИИ-психолог. Твоя цель — слушать пользователя и помогать ему методами КПТ.\n"
-    "КРИТИЧЕСКИЕ ПРАВИЛА ДЛЯ ТЕСТОВ И МЕТОДИК:\n"
-    "1. Если пользователь хочет пройти тест, выбери подходящий психологический тест и начни его.\n"
-    "2. Проводи тест строго ПОШАГОВО: задавай ровно ОДИН вопрос за раз. Жди ответа пользователя.\n"
-    "3. В конце теста подведи итог, расшифруй баллы.\n"
+    "Ты — professional, эмпатичный ИИ-психолог. Твоя цель — слушать пользователя и помогать ему методами КПТ.\n"
+    "Проводи тесты строго ПОШАГОВО: задавай ровно ОДИН вопрос за раз. Жди ответа.\n"
     "ВАЖНО: Всегда отвечай строго на русском языке!"
 )
 
 logging.basicConfig(level=logging.INFO)
-bot = Bot(token=TELEGRAM_TOKEN)
+
+bot = Bot(token=TELEGRAM_TOKEN, default=default_bot_properties.DefaultBotProperties(parse_mode="Markdown"))
 dp = Dispatcher()
-ai_client = Groq(api_key=AI_API_KEY)
-user_history = {}
+ai_client = AsyncGroq(api_key=AI_API_KEY)
+
+# Временное in-memory хранилище аналитики
+user_metadata = {}
+users_analytics = {}
+
+class ChatStates(StatesGroup):
+    processing = State()  # Защита от спама, пока ИИ думает
 
 def get_main_keyboard():
     builder = ReplyKeyboardBuilder()
-    builder.row(types.KeyboardButton(text="Пройти психологический тест 📝")) 
+    builder.row(types.KeyboardButton(text="Пройти психологический тест 📝"))
     builder.row(types.KeyboardButton(text="Мне тревожно 😰"), types.KeyboardButton(text="У меня выгорание 🔋"))
     builder.row(types.KeyboardButton(text="🗑️ Сбросить память чата"))
     return builder.as_markup(resize_keyboard=True)
 
+def track_user_activity(user: types.User):
+    uid = user.id
+    if uid not in users_analytics:
+        users_analytics[uid] = {
+            "full_name": user.full_name,
+            "username": f"@{user.username}" if user.username else "нет никнейма",
+            "messages_count": 0
+        }
+    users_analytics[uid]["messages_count"] += 1
+
+def is_access_allowed(user_id: int) -> bool:
+    if ADMIN_ID != 0 and user_id != ADMIN_ID:
+        return False
+    return True
+
 @dp.message(CommandStart())
-async def start_command(message: types.Message):
+async def start_command(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
-    user_history[user_id] = []
-    await message.answer("Привет! Я твой личный ИИ-психолог. 🌿 Чем могу помочь?", reply_markup=get_main_keyboard())
+    track_user_activity(message.from_user)
 
-@dp.message()
-async def handle_message(message: types.Message):
-    global DEFAULT_MODEL
-    user_id = message.from_user.id
-    user_text = message.text
-
-    if user_text == "🗑️ Сбросить память чата":
-        user_history[user_id] = []
-        await message.answer("Память чата полностью очищена.", reply_markup=get_main_keyboard())
+    if not is_access_allowed(user_id):
+        await message.answer("🔒 Извини, этот бот является приватным ИИ-ассистентом.")
         return
 
-    if user_id not in user_history:
-        user_history[user_id] = []
+    await state.clear()
+    await state.set_data({"history": []})
+    
+    user_metadata[user_id] = datetime.now()
+    await message.answer("Привет, создатель! Твой личный ИИ-психолог на связи. 🌿 Чем могу помочь?", reply_markup=get_main_keyboard())
 
-    user_history[user_id].append({"role": "user", "content": user_text})
-    messages_to_send = [{"role": "system", "content": SYSTEM_PROMPT}] + user_history[user_id][-8:]
+@dp.message(Command("admin"))
+async def admin_panel(message: types.Message):
+    user_id = message.from_user.id
+    if not is_access_allowed(user_id):
+        await message.answer("🔒 У тебя нет прав доступа к этой команде.")
+        return
+
+    session_duration = "Сессия еще не начата. Нажми /start"
+    if user_id in user_metadata:
+        diff = datetime.now() - user_metadata[user_id]
+        session_duration = f"{int(diff.total_seconds() // 60)} мин. {int(diff.total_seconds() % 60)} сек."
+
+    if users_analytics:
+        users_text = "".join(
+            f"👤 *{data['full_name']}* ({data['username']})\n"
+            f"└ ID: `{uid}` | Реплик: *{data['messages_count']}*\n\n"
+            for uid, data in users_analytics.items()
+        )
+    else:
+        users_text = "В базе активности пока пусто."
+
+    admin_text = (
+        "📊 *Панель управления создателя бота*\n\n"
+        f"👥 Всего уникальных пользователей: *{len(users_analytics)}*\n\n"
+        f"📈 *Детальная активность:*\n\n{users_text}"
+        f"⏱ Время текущей сессии: *{session_duration}*"
+    )
+    await message.answer(admin_text)
+
+@dp.message(F.text == "🗑️ Сбросить память чата")
+async def reset_memory(message: types.Message, state: FSMContext):
+    if not is_access_allowed(message.from_user.id):
+        await message.answer("🔒 Доступ ограничен.")
+        return
+        
+    await state.update_data(history=[])
+    user_metadata[message.from_user.id] = datetime.now()
+    await message.answer("Память чата очищена.", reply_markup=get_main_keyboard())
+
+# Хэндлер-заглушка от спама (работает, когда стейт переключен в processing)
+@dp.message(ChatStates.processing)
+async def handle_spam(message: types.Message):
+    await message.answer("⏳ Я еще обдумываю твой предыдущий ответ. Пожалуйста, подожди секунду...")
+
+# Универсальный обработчик всех остальных текстовых сообщений
+@dp.message()
+async def handle_message(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    user_text = message.text
+    track_user_activity(message.from_user)
+
+    if not is_access_allowed(user_id):
+        await message.answer("🔒 Доступ ограничен.")
+        return
+
+    # Защищаем стейт от спама
+    await state.set_state(ChatStates.processing)
+
+    state_data = await state.get_data()
+    history = state_data.get("history", [])
+    history.append({"role": "user", "content": user_text})
+
+    messages_to_send = [{"role": "system", "content": SYSTEM_PROMPT}] + history[-10:]
 
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
-
-    # УМНЫЙ АВТОПОДБОР МОДЕЛИ НА ЛЕТУ
     bot_reply = ""
+    current_model = DEFAULT_MODEL
+
     try:
-        # Попытка 1: Пробуем базовую модель
-        completion = ai_client.chat.completions.create(
-            model=DEFAULT_MODEL,
+        completion = await ai_client.chat.completions.create(
+            model=current_model,
             messages=messages_to_send,
             temperature=0.7,
             max_tokens=600
         )
-        bot_reply = completion.choices[0].message.content.strip()
+        bot_reply = completion.choices.message.content.strip()
     except Exception as e:
-        logging.warning(f"Модель {DEFAULT_MODEL} недоступна, запускаю автоподбор... Ошибка: {e}")
+        logging.warning(f"Ошибка основной модели, запуск автоподбора... Ошибка: {e}")
         try:
-            # Попытка 2: Опрашиваем Groq, какие модели сейчас вообще живы на сервере
-            models_list = ai_client.models.list()
-            active_models = [m.id for m in models_list.data if "preview" not in m.id and "whisper" not in m.id and "audio" not in m.id]
+            models_list = await ai_client.models.list()
+            active_models = [m.id for m in models_list.data if not any(x in m.id for x in ["preview", "whisper", "audio"])]
             
             if active_models:
-                # Берем самую первую рабочую текстовую модель из списка живых
-                DEFAULT_MODEL = active_models[0]
-                logging.info(f"Найдена активная модель: {DEFAULT_MODEL}. Переотправляю запрос...")
-                
-                completion = ai_client.chat.completions.create(
-                    model=DEFAULT_MODEL,
+                current_model = active_models[0]
+                completion = await ai_client.chat.completions.create(
+                    model=current_model,
                     messages=messages_to_send,
                     temperature=0.7,
                     max_tokens=600
                 )
-                bot_reply = completion.choices[0].message.content.strip()
+                bot_reply = completion.choices.message.content.strip()
         except Exception as critical_error:
-            logging.error(f"Критический сбой автоподбора: {critical_error}")
+            logging.error(f"Критический сбой API Groq: {critical_error}")
+
+    # Сбрасываем защитный стейт обратно в None (обычный режим)
+    await state.clear()
+    await state.set_data({"history": history})
 
     if bot_reply:
-        if "</think>" in bot_reply: 
+        if "</think>" in bot_reply:
             bot_reply = bot_reply.split("</think>")[-1].strip()
-        user_history[user_id].append({"role": "assistant", "content": bot_reply})
+
+        history.append({"role": "assistant", "content": bot_reply})
+        await state.update_data(history=history)
         await message.answer(bot_reply, reply_markup=get_main_keyboard())
     else:
-        await message.answer("⚠️ Извини, на серверах ИИ сейчас ведутся технические работы. Попробуй написать через минуту.", reply_markup=get_main_keyboard())
+        await message.answer("⚠️ Ошибка шлюза ИИ. Попробуйте позже.", reply_markup=get_main_keyboard())
 
 async def on_startup(bot: Bot) -> None:
     await bot.delete_webhook(drop_pending_updates=True)
