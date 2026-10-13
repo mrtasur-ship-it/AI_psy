@@ -20,7 +20,8 @@ AI_API_KEY = os.getenv("GROQ_API_KEY")
 # Стабильная бесплатная модель на серверах Groq
 MODEL_NAME = "llama3-8b-8192"
 
-RENDER_EXTERNAL_URL = "https://onrender.com"
+# Бот будет автоматически брать актуальную ссылку прямо из системы хостинга!
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "https://ai-psy-1.onrender.com")
 WEBHOOK_PATH = f"/webhook/{TELEGRAM_TOKEN}"
 WEBHOOK_URL = f"{RENDER_EXTERNAL_URL}{WEBHOOK_PATH}"
 
